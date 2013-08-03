@@ -1,0 +1,134 @@
+#!/usr/bin/env python2.7
+# -*- encoding: utf-8 -*-
+
+# Copyright (C) 2012-2013 Teodor Spæren (TheRedMood) <teodor_spaeren@riseup.net>
+# Licensed under the 2-clause BSD license, see LICENSE. */
+
+''' Tool for wireless network managment on OpenBSD. '''
+
+from posix import getgid
+from sys import argv, exit, platform, version_info
+from os import path
+import subprocess
+
+if version_info[0] == 2 and version_info[1] > 3:
+	import ConfigParser as confparser
+elif version_info[0] == 3:
+	import configparser as confparser
+else:
+	exit("Not compatible python version!")
+
+# Variables
+config_file = "/etc/wireless-py.conf";
+prog_name = path.basename(argv[0])
+allowed_network_options = ('nwid', 'wpakey', 'type');
+interface = ""
+
+
+# Functions
+def exit_wrapper(msg):
+	exit("{0}: {1}".format(prog_name, msg))
+
+
+def parse_networks(parser):
+	''' Method for parsing and returning networks'''
+	networks = {}
+
+	for section in parser.sections():
+		# We don't need to parse the config
+		if section == 'config':
+			continue
+
+		# Not all optiones are needed:
+		networks[section] = {'nwid': section, 'wpakey': '', 'type': 'open'} 
+
+		for option, value in parser.items(section):
+			if option in allowed_network_options:
+				networks[section][option] = value
+
+	return networks
+
+def connect_to_wlan(name, data):
+	print("Connecting to SSID {0} on {1}".format(data['nwid'], interface))
+
+	if data['type'] == 'open':
+		subprocess.call(['ifconfig', interface, 'nwid', data['nwid']])
+
+	elif data['type'] == 'wpa':
+		subprocess.call(
+			['ifconfig', interface, 'nwid', data['nwid'], 
+				'wpakey', data['wpakey']]
+		)
+	else:
+		exit_wrapper("Unknown type: {0}".format(data['type']))
+	
+	print("Obtaining IP address via DHCP")
+	return subprocess.call(['dhclient', interface])
+
+# START OF CHECKS
+
+# User is not root!
+if getgid() is not 0:
+	exit_wrapper("Need root privileges to run")
+
+# This is a OpenBSD tool only!
+if 'openbsd' not in platform: 
+	exit_wrapper("You are not running OpenBSD, sorry for your loss :(")
+
+try:
+	fp = open(config_file, 'r')
+except IOError as e:
+	exit_wrapper("{0}: {1}".format(e.filename, e.strerror))
+
+
+par = confparser.ConfigParser()
+
+# Things could go wrong
+try:
+	par.readfp(fp)
+
+except confparser.ParsingError as e:
+	exit_wrapper(e.message)
+
+finally:
+	fp.close()
+
+# There is a required syntax that needs to be checked.
+if not par.has_section('config'):
+	exit_wrapper('No [config] section in your {0}'.format(config_file))
+
+elif not par.has_option('config', 'interface'):
+	exit_wrapper('No interface option in [config] section in your {0}'.format(
+		config_file))
+
+else:
+	interface = par.get('config', 'interface')
+
+# END OF CHECKS
+
+# Parse the networks and return a nice list:
+networks = parse_networks(par)
+
+# DISPLAY
+
+# clear
+subprocess.call(['clear'])
+
+print("{:<20s} {:<20s} {:<10s}".format("Network Name", "SSID", "Type"))
+print("{0}".format("-" * 50))
+
+for net in networks:
+	netw = networks[net]
+	print("{:<20s} {:<20s} {:<10s}".format(net, netw['nwid'], netw['type']))
+
+print("\n{0}".format("-" * 50))
+
+if len(argv) == 2:
+	if argv[1] in networks:
+		exit(connect_to_wlan(argv[1], networks[argv[1]]))
+	else:
+		exit_wrapper("No network with name {0}".format(argv[1]))
+
+else:
+	exit("Usage: {0} network_name".format(prog_name))
+
